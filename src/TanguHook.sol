@@ -121,9 +121,7 @@ contract TanguHook is BaseHook, Ownable {
         uint pendingReward = pendingRewards(user, currency);
         UserInfo storage userInfo = userInfos[currency][user];
         if (pendingReward > 0) {
-            totalShares[currency] -= userInfo.amount;
-            userInfo.rewardDebt = 0;
-            userInfo.amount = 0;
+            userInfo.rewardDebt = (userInfo.amount * rewardPerShare[currency]) / 1e18;
         }
         return pendingReward;
     }

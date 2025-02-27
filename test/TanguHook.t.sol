@@ -204,7 +204,7 @@ contract TestTanguHook is Test, IERC721Receiver {
         uint fee = swapAmount / 1000;
         uint aReserveBefore = USDC.balanceOf(address(aUSDC));
 
-        swapExactInputSingle(poolKey, swapAmount, 0);
+        swapExactInputSingle(poolKey, swapAmount, 0, address(this));
 
         assertEq(USDC.balanceOf(address(aUSDC)) - aReserveBefore, fee);
         assertEq(aUSDC.balanceOf(address(tanguHook)), fee);
@@ -240,5 +240,56 @@ contract TestTanguHook is Test, IERC721Receiver {
         assertEq(tanguHook.pendingRewards(ALICE, Currency.wrap(address(USDC))), 0);
         assertEq(USDC.balanceOf(ALICE) - usdcBalBefore, fee / 2);
         vm.stopPrank();
+    }
+
+    function testRewardsDistributionVolume() public {
+        setupPool(address(USDC), address(USDT));
+
+        uint128 swapAmount = 2_000e6;
+        uint rewards = swapAmount / 2000;
+
+        // Alice trade 2k USDC =>
+        // Alice = 1 USDC
+        vm.startPrank(ALICE);
+        permit2.approve(address(USDC), address(universalRouter), type(uint160).max, uint48(block.timestamp + 60));
+        swapExactInputSingle(poolKey, swapAmount, 0, ALICE);
+        vm.stopPrank();
+        assertEq(tanguHook.pendingRewards(ALICE, Currency.wrap(address(USDC))), rewards);
+
+        // Bob trade 2k USDC => Alice 2k, Bob 2k
+        // Alice = 1 USDC + 0.5 USDC
+        // Bob = 0.5 USDC
+        vm.startPrank(BOB);
+        permit2.approve(address(USDC), address(universalRouter), type(uint160).max, uint48(block.timestamp + 60));
+        swapExactInputSingle(poolKey, swapAmount, 0, BOB);
+        vm.stopPrank();
+        assertEq(tanguHook.pendingRewards(ALICE, Currency.wrap(address(USDC))), rewards + rewards / 2);
+        assertEq(tanguHook.pendingRewards(BOB, Currency.wrap(address(USDC))), rewards / 2);
+
+        // Charlie trade 4k USDC => Alice 2k, Bob 2k, Charlie 4k
+        // Alice = 1 USDC + 0.5 USDC + 0.5 USDC,
+        // Bob = 0.5 USDC + 0.5 USDC,
+        // Charlie = 1 USDC
+        vm.startPrank(CHARLIE);
+        permit2.approve(address(USDC), address(universalRouter), type(uint160).max, uint48(block.timestamp + 60));
+        swapExactInputSingle(poolKey, swapAmount * 2, 0, CHARLIE);
+        vm.stopPrank();
+        assertEq(tanguHook.pendingRewards(ALICE, Currency.wrap(address(USDC))), 1e6 * 2);
+        assertEq(tanguHook.pendingRewards(BOB, Currency.wrap(address(USDC))), 1e6);
+        assertEq(tanguHook.pendingRewards(CHARLIE, Currency.wrap(address(USDC))), 1e6);
+
+        // Alice claim, Bob trade 2k USDC => Alice 2k, Bob 4k, Charlie 4k
+        // Alice = 0.2 USDC
+        // Bob = 0.5 USDC + 0.5 USDC + 0.4 USDC
+        // Charlie = 1 USDC + 0.4 USDC
+        vm.prank(ALICE);
+        tanguHook.claimFee(Currency.wrap(address(USDC)));
+        vm.startPrank(BOB);
+        permit2.approve(address(USDC), address(universalRouter), type(uint160).max, uint48(block.timestamp + 60));
+        swapExactInputSingle(poolKey, swapAmount, 0, BOB);
+        vm.stopPrank();
+        assertEq(tanguHook.pendingRewards(ALICE, Currency.wrap(address(USDC))), 0.2e6);
+        assertEq(tanguHook.pendingRewards(BOB, Currency.wrap(address(USDC))), 1.4e6);
+        assertEq(tanguHook.pendingRewards(CHARLIE, Currency.wrap(address(USDC))), 1.4e6);
     }
 }
