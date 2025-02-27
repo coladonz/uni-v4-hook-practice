@@ -16,6 +16,3 @@
 [submodule "lib/universal-router"]
 	path = lib/universal-router
 	url = https://github.com/uniswap/universal-router
-[submodule "lib/uniswap-hooks"]
-	path = lib/uniswap-hooks
-	url = https://github.com/openzeppelin/uniswap-hooks

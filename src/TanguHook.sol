@@ -68,26 +68,42 @@ contract TanguHook is BaseHook, Ownable {
                 afterSwap: false,
                 beforeDonate: false,
                 afterDonate: false,
-                beforeSwapReturnDelta: false,
+                beforeSwapReturnDelta: true,
                 afterSwapReturnDelta: false,
                 afterAddLiquidityReturnDelta: false,
                 afterRemoveLiquidityReturnDelta: false
             });
     }
 
+    function getHookData(address user) public pure returns (bytes memory) {
+        return abi.encode(user);
+    }
+
+    function parseHookData(bytes calldata data) public pure returns (address user) {
+        return abi.decode(data, (address));
+    }
+
     function pendingRewards(address user, Currency currency) public view returns (uint256) {
         UserInfo storage userInfo = userInfos[currency][user];
         uint256 reward = (userInfo.amount * rewardPerShare[currency]) / 1e18 - userInfo.rewardDebt;
 
-        return (reward * _getATokenSharePrice(currency)) / 1e18;
+        return reward;
     }
 
-    function claimFee(address user, Currency currency) external {
-        _claimFee(user, currency);
+    function pendingRewardExact(address user, Currency currency) external view returns (uint256) {
+        uint share = pendingRewards(user, currency);
+        uint256 reward = (share * _getATokenSharePrice(currency)) / 1e18;
+        return reward;
+    }
+
+    function claimFee(Currency currency) external {
+        uint rewards = _claimFee(msg.sender, currency);
+        _withdrawAave(rewards, msg.sender, currency);
     }
 
     function claimDevFee(Currency currency) external onlyOwner {
-        _withdrawAave(devFeeAccrued[currency], address(this), currency);
+        _withdrawAave(devFeeAccrued[currency], msg.sender, currency);
+        devFeeAccrued[currency] = 0;
     }
 
     function _addRewards(Currency currency, uint256 amount) internal {
@@ -101,15 +117,15 @@ contract TanguHook is BaseHook, Ownable {
         totalShares[currency] += amount;
     }
 
-    function _claimFee(address user, Currency currency) internal {
+    function _claimFee(address user, Currency currency) internal returns (uint) {
         uint pendingReward = pendingRewards(user, currency);
         UserInfo storage userInfo = userInfos[currency][user];
         if (pendingReward > 0) {
-            userInfo.rewardDebt = (userInfo.amount * rewardPerShare[currency]) / 1e18;
             totalShares[currency] -= userInfo.amount;
+            userInfo.rewardDebt = 0;
             userInfo.amount = 0;
-            _withdrawAave(pendingReward, user, currency);
         }
+        return pendingReward;
     }
 
     function _getATokenSharePrice(Currency currency) internal view returns (uint) {
@@ -140,11 +156,13 @@ contract TanguHook is BaseHook, Ownable {
     }
 
     function _beforeSwap(
-        address sender,
+        address,
         PoolKey calldata,
         IPoolManager.SwapParams calldata swapParams,
-        bytes calldata
+        bytes calldata hookData
     ) internal override returns (bytes4, BeforeSwapDelta, uint24) {
+        address user = parseHookData(hookData);
+
         uint swapAmount = uint256(
             swapParams.amountSpecified > 0 ? swapParams.amountSpecified : -swapParams.amountSpecified
         );
@@ -158,13 +176,12 @@ contract TanguHook is BaseHook, Ownable {
         // Update Fee, Deposit
         totalFeeAccrued[swapCurrency] += fee;
         devFeeAccrued[swapCurrency] += fee / 2;
-        _deposit(sender, swapAmount, swapCurrency);
+        _deposit(user, swapAmount, swapCurrency);
         _addRewards(swapParams.zeroForOne ? USDC : USDT, fee / 2);
 
         // Return Delta
         BeforeSwapDelta delta = toBeforeSwapDelta(int128(int256(fee)), 0);
 
         return (BaseHook.beforeSwap.selector, delta, 0);
-        // return (BaseHook.beforeSwap.selector, BeforeSwapDelta.wrap(0), 0);
     }
 }

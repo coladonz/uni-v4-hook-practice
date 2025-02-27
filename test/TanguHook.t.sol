@@ -44,6 +44,10 @@ contract TestTanguHook is Test, IERC721Receiver {
     IERC20 constant USDC = IERC20(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
     IERC20 constant USDT = IERC20(0xdAC17F958D2ee523a2206206994597C13D831ec7);
 
+    address constant ALICE = address(0x111);
+    address constant BOB = address(0x222);
+    address constant CHARLIE = address(0x333);
+
     TanguHook tanguHook;
     PoolKey poolKey;
     uint160 initSqrtPriceX96;
@@ -55,7 +59,7 @@ contract TestTanguHook is Test, IERC721Receiver {
     function setupPool(address usdc, address usdt) public {
         (, bytes32 salt) = HookMiner.find(
             address(this),
-            uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_INITIALIZE_FLAG),
+            uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG),
             type(TanguHook).creationCode,
             abi.encode(address(poolManager), address(aavePool))
         );
@@ -97,7 +101,8 @@ contract TestTanguHook is Test, IERC721Receiver {
     function swapExactInputSingle(
         PoolKey memory key,
         uint128 amountIn,
-        uint128 minAmountOut
+        uint128 minAmountOut,
+        address user
     ) public returns (uint256 amountOut) {
         // Encode the Universal Router command
         bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
@@ -118,7 +123,7 @@ contract TestTanguHook is Test, IERC721Receiver {
                 zeroForOne: true,
                 amountIn: amountIn,
                 amountOutMinimum: minAmountOut,
-                hookData: bytes("")
+                hookData: tanguHook.getHookData(user)
             })
         );
         params[1] = abi.encode(key.currency0, amountIn);
@@ -137,7 +142,29 @@ contract TestTanguHook is Test, IERC721Receiver {
     }
 
     function setUp() public {
-        vm.createSelectFork(vm.envString("MAINNET_RPC_URL"));
+        vm.createSelectFork("http://127.0.0.1:8545");
+
+        deal(address(USDC), ALICE, 1_000_000e6);
+        deal(address(USDT), ALICE, 1_000_000e6);
+        deal(address(USDC), BOB, 1_000_000e6);
+        deal(address(USDT), BOB, 1_000_000e6);
+        deal(address(USDC), CHARLIE, 1_000_000e6);
+        deal(address(USDT), CHARLIE, 1_000_000e6);
+
+        vm.startPrank(ALICE);
+        USDC.forceApprove(address(permit2), type(uint).max);
+        USDT.forceApprove(address(permit2), type(uint).max);
+        vm.stopPrank();
+
+        vm.startPrank(BOB);
+        USDC.forceApprove(address(permit2), type(uint).max);
+        USDT.forceApprove(address(permit2), type(uint).max);
+        vm.stopPrank();
+
+        vm.startPrank(CHARLIE);
+        USDC.forceApprove(address(permit2), type(uint).max);
+        USDT.forceApprove(address(permit2), type(uint).max);
+        vm.stopPrank();
     }
 
     function testSetupPool() public {
@@ -171,9 +198,47 @@ contract TestTanguHook is Test, IERC721Receiver {
     function testSwapFeeToAave() public {
         setupPool(address(USDC), address(USDT));
 
-        USDC.approve(address(permit2), type(uint256).max);
         permit2.approve(address(USDC), address(universalRouter), type(uint160).max, uint48(block.timestamp + 60));
 
-        swapExactInputSingle(poolKey, 1_000e6, 0);
+        uint128 swapAmount = 1_000e6;
+        uint fee = swapAmount / 1000;
+        uint aReserveBefore = USDC.balanceOf(address(aUSDC));
+
+        swapExactInputSingle(poolKey, swapAmount, 0);
+
+        assertEq(USDC.balanceOf(address(aUSDC)) - aReserveBefore, fee);
+        assertEq(aUSDC.balanceOf(address(tanguHook)), fee);
+    }
+
+    function testWithdrawRewardsForDevAndTraders() public {
+        setupPool(address(USDC), address(USDT));
+
+        vm.startPrank(ALICE);
+        permit2.approve(address(USDC), address(universalRouter), type(uint160).max, uint48(block.timestamp + 60));
+
+        uint128 swapAmount = 1_000e6;
+        uint fee = swapAmount / 1000;
+
+        swapExactInputSingle(poolKey, swapAmount, 0, ALICE);
+        vm.stopPrank();
+
+        assertEq(tanguHook.devFeeAccrued(Currency.wrap(address(USDC))), fee / 2);
+        assertEq(tanguHook.devFeeAccrued(Currency.wrap(address(USDT))), 0);
+
+        assertEq(tanguHook.pendingRewards(ALICE, Currency.wrap(address(USDC))), fee / 2);
+
+        vm.startPrank(address(this));
+        uint usdcDevBalBefore = USDC.balanceOf(address(this));
+        tanguHook.claimDevFee(Currency.wrap(address(USDC)));
+        assertEq(tanguHook.devFeeAccrued(Currency.wrap(address(USDC))), 0);
+        assertEq(USDC.balanceOf(address(this)) - usdcDevBalBefore, fee / 2);
+        vm.stopPrank();
+
+        vm.startPrank(ALICE);
+        uint usdcBalBefore = USDC.balanceOf(ALICE);
+        tanguHook.claimFee(Currency.wrap(address(USDC)));
+        assertEq(tanguHook.pendingRewards(ALICE, Currency.wrap(address(USDC))), 0);
+        assertEq(USDC.balanceOf(ALICE) - usdcBalBefore, fee / 2);
+        vm.stopPrank();
     }
 }
