@@ -6,3 +6,5 @@ typechain/
 foundry-out/
 .vscode/
 out/
+.env
+lib/
