@@ -175,7 +175,7 @@ contract TanguHook is BaseHook, Ownable {
         totalFeeAccrued[swapCurrency] += fee;
         devFeeAccrued[swapCurrency] += fee / 2;
         _deposit(user, swapAmount, swapCurrency);
-        _addRewards(swapParams.zeroForOne ? USDC : USDT, fee / 2);
+        _addRewards(swapParams.zeroForOne ? USDC : USDT, fee - fee / 2);
 
         // Return Delta
         BeforeSwapDelta delta = toBeforeSwapDelta(int128(int256(fee)), 0);
