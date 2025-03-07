@@ -41,8 +41,9 @@ contract TanguHook is BaseHook, Ownable {
     mapping(Currency => uint256) public rewardPerShare;
     mapping(Currency => uint256) public totalShares;
 
-    // TODO: Add events
     error InvalidPoolTokens();
+    event ClaimedFee(address indexed user, Currency currency, uint256 amount);
+    event ClaimedDevFee(address indexed user, Currency currency, uint256 amount);
 
     constructor(IPoolManager _poolManager, IAavePool _pool) BaseHook(_poolManager) Ownable(msg.sender) {
         aavePool = _pool;
@@ -99,11 +100,15 @@ contract TanguHook is BaseHook, Ownable {
     function claimFee(Currency currency) external {
         uint rewards = _claimFee(msg.sender, currency);
         _withdrawAave(rewards, msg.sender, currency);
+
+        emit ClaimedFee(msg.sender, currency, rewards);
     }
 
     function claimDevFee(Currency currency) external onlyOwner {
-        _withdrawAave(devFeeAccrued[currency], msg.sender, currency);
+        uint rewards = devFeeAccrued[currency];
         devFeeAccrued[currency] = 0;
+        _withdrawAave(rewards, owner(), currency);
+        emit ClaimedDevFee(owner(), currency, rewards);
     }
 
     function _addRewards(Currency currency, uint256 amount) internal {
