@@ -13,8 +13,10 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IAavePool} from "./interfaces/IAavePool.sol";
-import "forge-std/console2.sol";
 
+/// @title TanguHook
+/// @author coladonz
+/// @notice Hook for Uniswap V4
 contract TanguHook is BaseHook, Ownable {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
@@ -52,10 +54,15 @@ contract TanguHook is BaseHook, Ownable {
         IERC20(Currency.unwrap(USDT)).forceApprove(address(aavePool), type(uint256).max);
     }
 
+    /// @notice Set the aToken for a given currency
+    /// @param aToken The address of the aToken
+    /// @param uToken The currency
     function setATokens(address aToken, Currency uToken) external onlyOwner {
         aTokens[uToken] = IERC20(aToken);
     }
 
+    /// @notice Get the permissions for the hook
+    /// @return The permissions for the hook
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return
             Hooks.Permissions({
@@ -76,14 +83,24 @@ contract TanguHook is BaseHook, Ownable {
             });
     }
 
+    /// @notice Get the hook data for a given user
+    /// @param user The address of the user
+    /// @return The hook data for the user
     function getHookData(address user) public pure returns (bytes memory) {
         return abi.encode(user);
     }
 
+    /// @notice Parse the hook data for a given user
+    /// @param data The hook data
+    /// @return user The address of the user
     function parseHookData(bytes calldata data) public pure returns (address user) {
         return abi.decode(data, (address));
     }
 
+    /// @notice Get the pending rewards for a given user and currency
+    /// @param user The address of the user
+    /// @param currency The currency
+    /// @return The pending rewards for the user and currency
     function pendingRewards(address user, Currency currency) public view returns (uint256) {
         UserInfo storage userInfo = userInfos[currency][user];
         uint256 reward = (userInfo.amount * rewardPerShare[currency]) / 1e18 - userInfo.rewardDebt;
@@ -91,12 +108,18 @@ contract TanguHook is BaseHook, Ownable {
         return reward;
     }
 
+    /// @notice Get the pending rewards for a given user and currency in exact amount
+    /// @param user The address of the user
+    /// @param currency The currency
+    /// @return The pending rewards for the user and currency in exact amount
     function pendingRewardExact(address user, Currency currency) external view returns (uint256) {
         uint share = pendingRewards(user, currency);
         uint256 reward = (share * _getATokenSharePrice(currency)) / 1e18;
         return reward;
     }
 
+    /// @notice Claim the fee for a given user and currency
+    /// @param currency The currency
     function claimFee(Currency currency) external {
         uint rewards = _claimFee(msg.sender, currency);
         _withdrawAave(rewards, msg.sender, currency);
@@ -104,6 +127,8 @@ contract TanguHook is BaseHook, Ownable {
         emit ClaimedFee(msg.sender, currency, rewards);
     }
 
+    /// @notice Claim the dev fee for a given currency
+    /// @param currency The currency
     function claimDevFee(Currency currency) external onlyOwner {
         uint rewards = devFeeAccrued[currency];
         devFeeAccrued[currency] = 0;
@@ -111,10 +136,17 @@ contract TanguHook is BaseHook, Ownable {
         emit ClaimedDevFee(owner(), currency, rewards);
     }
 
+    /// @notice Add rewards to the pool
+    /// @param currency The currency
+    /// @param amount The amount of rewards to add
     function _addRewards(Currency currency, uint256 amount) internal {
         rewardPerShare[currency] += (amount * 1e18) / totalShares[currency];
     }
 
+    /// @notice Deposit funds into the pool
+    /// @param user The address of the user
+    /// @param amount The amount of funds to deposit
+    /// @param currency The currency
     function _deposit(address user, uint amount, Currency currency) internal {
         UserInfo storage userInfo = userInfos[currency][user];
         userInfo.amount += amount;
@@ -122,6 +154,10 @@ contract TanguHook is BaseHook, Ownable {
         totalShares[currency] += amount;
     }
 
+    /// @notice Claim the fee for a given user and currency
+    /// @param user The address of the user
+    /// @param currency The currency
+    /// @return The amount of fee claimed
     function _claimFee(address user, Currency currency) internal returns (uint) {
         uint pendingReward = pendingRewards(user, currency);
         UserInfo storage userInfo = userInfos[currency][user];
@@ -131,15 +167,26 @@ contract TanguHook is BaseHook, Ownable {
         return pendingReward;
     }
 
+    /// @notice Get the price of the aToken shares
+    /// @param currency The currency
+    /// @return The price of the aToken shares
     function _getATokenSharePrice(Currency currency) internal view returns (uint) {
         return (aTokens[currency].balanceOf(address(this)) * 1e18) / totalATokenShares[currency];
     }
 
+    /// @notice Deposit funds into the aave pool
+    /// @param share The amount of shares to deposit
+    /// @param currency The currency
     function _depositAave(uint share, Currency currency) internal {
         totalATokenShares[currency] += share;
         aavePool.supply(Currency.unwrap(currency), share, address(this), 0);
     }
 
+    /// @notice Withdraw funds from the aave pool
+    /// @param share The amount of shares to withdraw
+    /// @param to The address to withdraw to
+    /// @param currency The currency
+    /// @return The amount of funds withdrawn
     function _withdrawAave(uint share, address to, Currency currency) internal returns (uint) {
         uint amount = (share * _getATokenSharePrice(currency)) / 1e18;
         totalATokenShares[currency] -= share;
@@ -150,6 +197,9 @@ contract TanguHook is BaseHook, Ownable {
     // NOTE: see IHooks.sol for function documentation
     // -----------------------------------------------
 
+    /// @notice Initialize the pool
+    /// @param key The pool key
+    /// @return The selector for the function
     function _beforeInitialize(address, PoolKey calldata key, uint160) internal override returns (bytes4) {
         if (equals(key.currency0, USDC) && equals(key.currency1, USDT)) {
             return BaseHook.beforeInitialize.selector;
@@ -158,6 +208,10 @@ contract TanguHook is BaseHook, Ownable {
         revert InvalidPoolTokens();
     }
 
+    /// @notice Before swap hook
+    /// @param swapParams The swap parameters
+    /// @param hookData The hook data
+    /// @return The selector for the function, the before swap delta, and the fee
     function _beforeSwap(
         address,
         PoolKey calldata,
