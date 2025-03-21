@@ -23,15 +23,15 @@ contract TanguHook is BaseHook, Ownable {
     using BeforeSwapDeltaLibrary for BeforeSwapDelta;
     using SafeERC20 for IERC20;
 
-    Currency public immutable USDC = Currency.wrap(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
-    Currency public immutable USDT = Currency.wrap(0xdAC17F958D2ee523a2206206994597C13D831ec7);
-
-    IAavePool public immutable aavePool;
-
     struct UserInfo {
         uint256 amount;
         uint256 rewardDebt;
     }
+
+    Currency public immutable USDC = Currency.wrap(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
+    Currency public immutable USDT = Currency.wrap(0xdAC17F958D2ee523a2206206994597C13D831ec7);
+
+    IAavePool public immutable aavePool;
 
     mapping(Currency => uint256) public devFeeAccrued;
     mapping(Currency => uint256) public totalFeeAccrued;
@@ -43,9 +43,10 @@ contract TanguHook is BaseHook, Ownable {
     mapping(Currency => uint256) public rewardPerShare;
     mapping(Currency => uint256) public totalShares;
 
-    error InvalidPoolTokens();
     event ClaimedFee(address indexed user, Currency currency, uint256 amount);
     event ClaimedDevFee(address indexed user, Currency currency, uint256 amount);
+
+    error InvalidPoolTokens();
 
     constructor(IPoolManager _poolManager, IAavePool _pool) BaseHook(_poolManager) Ownable(msg.sender) {
         aavePool = _pool;
@@ -83,18 +84,14 @@ contract TanguHook is BaseHook, Ownable {
             });
     }
 
-    /// @notice Get the hook data for a given user
+    /// @notice Get the pending rewards for a given user and currency in exact amount
     /// @param user The address of the user
-    /// @return The hook data for the user
-    function getHookData(address user) public pure returns (bytes memory) {
-        return abi.encode(user);
-    }
-
-    /// @notice Parse the hook data for a given user
-    /// @param data The hook data
-    /// @return user The address of the user
-    function parseHookData(bytes calldata data) public pure returns (address user) {
-        return abi.decode(data, (address));
+    /// @param currency The currency
+    /// @return The pending rewards for the user and currency in exact amount
+    function pendingRewardExact(address user, Currency currency) external view returns (uint256) {
+        uint share = pendingRewards(user, currency);
+        uint256 reward = (share * _getATokenSharePrice(currency)) / 1e18;
+        return reward;
     }
 
     /// @notice Get the pending rewards for a given user and currency
@@ -108,14 +105,18 @@ contract TanguHook is BaseHook, Ownable {
         return reward;
     }
 
-    /// @notice Get the pending rewards for a given user and currency in exact amount
+    /// @notice Get the hook data for a given user
     /// @param user The address of the user
-    /// @param currency The currency
-    /// @return The pending rewards for the user and currency in exact amount
-    function pendingRewardExact(address user, Currency currency) external view returns (uint256) {
-        uint share = pendingRewards(user, currency);
-        uint256 reward = (share * _getATokenSharePrice(currency)) / 1e18;
-        return reward;
+    /// @return The hook data for the user
+    function getHookData(address user) public pure returns (bytes memory) {
+        return abi.encode(user);
+    }
+
+    /// @notice Parse the hook data for a given user
+    /// @param data The hook data
+    /// @return user The address of the user
+    function parseHookData(bytes calldata data) public pure returns (address user) {
+        return abi.decode(data, (address));
     }
 
     /// @notice Claim the fee for a given user and currency
@@ -134,6 +135,13 @@ contract TanguHook is BaseHook, Ownable {
         devFeeAccrued[currency] = 0;
         _withdrawAave(rewards, owner(), currency);
         emit ClaimedDevFee(owner(), currency, rewards);
+    }
+
+    /// @notice Get the price of the aToken shares
+    /// @param currency The currency
+    /// @return The price of the aToken shares
+    function _getATokenSharePrice(Currency currency) internal view returns (uint) {
+        return (aTokens[currency].balanceOf(address(this)) * 1e18) / totalATokenShares[currency];
     }
 
     /// @notice Add rewards to the pool
@@ -165,13 +173,6 @@ contract TanguHook is BaseHook, Ownable {
             userInfo.rewardDebt = (userInfo.amount * rewardPerShare[currency]) / 1e18;
         }
         return pendingReward;
-    }
-
-    /// @notice Get the price of the aToken shares
-    /// @param currency The currency
-    /// @return The price of the aToken shares
-    function _getATokenSharePrice(Currency currency) internal view returns (uint) {
-        return (aTokens[currency].balanceOf(address(this)) * 1e18) / totalATokenShares[currency];
     }
 
     /// @notice Deposit funds into the aave pool
